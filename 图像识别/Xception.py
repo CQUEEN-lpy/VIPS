@@ -2,22 +2,22 @@ import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 from utils.data_utils import *
 import tensorflow.keras as keras
-import numpy as np
+import tensorflow.keras.layers as layers
 
 '''
 basic parameter config
 '''
 tf.config.experimental.list_physical_devices('GPU')
-epochs = 10
-batch_size = 32
-img_width = 1200
-img_height = 1200
+epochs = 100
+batch_size = 64
+img_width = 244
+img_height = 244
 
 '''
 # load the data and define the save dir
 '''
-data_dir = pathlib.Path(r'/home/zhang.xinxi/CV/data/image1')
-save_dir = '/home/zhang.xinxi/CV/checkpoint/Xception/cp-{epoch:04d}.ckpt'
+data_dir = pathlib.Path(r'/home/zhang.xinxi/CV/data/2000')
+save_dir = '/home/zhang.xinxi/CV/checkpoint/finetune_Xception_2000_overfitSolver1/cp-{epoch:04d}.ckpt'
 cp_callback = tf.keras.callbacks.ModelCheckpoint(
     filepath=save_dir,
     verbose=1,
@@ -34,23 +34,45 @@ load the Xception model and to create my own model
 # load the Xception_model
 Xception_model = keras.applications.Xception(
     weights= 'imagenet',
-    input_shape = (1200,1200,3),
+    input_shape = (img_width, img_height, 3),
     include_top = False,
     classifier_activation=False
 )
-Xception_model.trainable = False
+Xception_model.trainable = True
+
+# data augmentation
+data_augmentation = keras.Sequential(
+  [
+    layers.experimental.preprocessing.RandomFlip("horizontal",
+                                                 input_shape=(img_height,
+                                                              img_width,
+                                                              3)),
+    layers.experimental.preprocessing.RandomRotation(0.1),
+    layers.experimental.preprocessing.RandomZoom(0.1),
+  ]
+)
+
+# classifier
+classifier = keras.Sequential([
+    layers.Dropout(0.4),
+    layers.Dense(256, activation='relu'),
+    layers.Dropout(0.4),
+    layers.Dense(64, activation='relu'),
+    layers.Dropout(0.4),
+    layers.Dense(class_nums)]
+)
 
 # create my own model and compile
-inputs = keras.Input(shape=(1200, 1200, 3))
-norm_layer = keras.layers.experimental.preprocessing.Normalization()
-mean = np.array([127.5] * 3)
-var = mean ** 2
-x = norm_layer(inputs)
-norm_layer.set_weights([mean, var])
-x = Xception_model(inputs, training=False)
+inputs = keras.Input(shape=(img_width, img_height, 3))
+#normalization
+norm_layer = keras.layers.experimental.preprocessing.Rescaling(1. / 255, input_shape=(img_height, img_width, 3))
+
+x = data_augmentation(inputs)
+x = norm_layer(x)
+
+x = Xception_model(x, training=True)
 x = keras.layers.GlobalAveragePooling2D()(x)
-x = keras.layers.Dropout(0.2)(x)
-outputs = keras.layers.Dense(class_nums)(x)
+outputs = classifier(x)
 model = keras.Model(inputs, outputs)
 
 model.compile(optimizer=keras.optimizers.Adam(),
@@ -58,9 +80,13 @@ model.compile(optimizer=keras.optimizers.Adam(),
               metrics=['accuracy'])
 
 print(model.summary())
+
+'''
+model training
+'''
 history = model.fit(
         train_ds,
-        validation_data = val_ds,
+        validation_data=val_ds,
         epochs=epochs,
         callbacks=[cp_callback]
     )
