@@ -1,29 +1,27 @@
-# training acc=90; eval acc=75
 '''
 import
 '''
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 import tensorflow as tf
+mirrored_strategy = tf.distribute.MirroredStrategy()
 import pathlib
-import tensorflow.keras as keras
-import tensorflow.keras.layers as layers
-
+from model.myEFF import *
 
 '''
 basic parameter config
 '''
 epochs = 100
-batch_size = 4
-img_width = 500
-img_height = 500
-portion = 0.8   # the portion of training set
+batch_size = 128
+img_width = 244
+img_height = 244
+portion = 0.9   # the portion of training set
 
 '''
 # load the data and define the save dir and callback function
 '''
-data_dir = pathlib.Path(r'/home/zhang.xinxi/CV/data/image2/part')
-save_dir = '/home/zhang.xinxi/CV/checkpoint/big/cp-{epoch:04d}.ckpt'
+data_dir = pathlib.Path(r'/home/zhang.xinxi/CV/data/all/train')
+save_dir = '/home/zhang.xinxi/CV/checkpoint/test/cp-{epoch:04d}.ckpt'
 cp_callback = tf.keras.callbacks.ModelCheckpoint(
     filepath=save_dir,
     verbose=1,
@@ -61,61 +59,17 @@ def decay(epoch):
   else:
     return 1e-5
 
-# load the EFF_model
-EFF_model = tf.keras.applications.EfficientNetB6(
-    include_top=False, weights='imagenet', input_tensor=None,
-    input_shape=(img_height, img_width, 3), pooling=None, classes=class_nums,
-    classifier_activation=None,
-)
-EFF_model.trainable = True
-
-# data augmentation
-data_augmentation = keras.Sequential(
-  [
-    layers.experimental.preprocessing.RandomFlip("horizontal",
-                                                 input_shape=(img_height,
-                                                              img_width,
-                                                              3)),
-    layers.experimental.preprocessing.RandomRotation(0.1),
-    layers.experimental.preprocessing.RandomZoom(0.1),
-  ]
-)
-
-# classifier
-classifier = keras.Sequential([
-    layers.Dropout(0.5),
-    layers.Dense(class_nums, activation='softmax')]
-)
-
-# normalization
-norm_layer = keras.layers.experimental.preprocessing.Rescaling(1. / 255, input_shape=(img_height, img_width, 3))
-
 # transfer the label to one_hot form
 def map_func(images, label):
-  one_hot_label = tf.one_hot(label, depth=class_nums)
-  return images, one_hot_label
+    one_hot_label = tf.one_hot(label, depth=class_nums)
+    return images, one_hot_label
 
-train_ds = train_ds.map(map_func)
-val_ds = val_ds.map(map_func)
+train_ds = train_ds.map(map_func,num_parallel_calls=tf.data.AUTOTUNE)
+val_ds = val_ds.map(map_func,num_parallel_calls=tf.data.AUTOTUNE)
 
-# check the data
-for i, j in train_ds.take(1):
-    print(j)
-
-# create my own model and compile
-inputs = keras.Input(shape=(img_width, img_height, 3))
-
-x = data_augmentation(inputs)
-x = norm_layer(x)
-x = EFF_model(x, training=True)
-x = keras.layers.GlobalAveragePooling2D()(x)
-
-outputs = classifier(x)
-model = keras.Model(inputs, outputs)
-
-model.compile(optimizer=keras.optimizers.Adam(),
-              loss=keras.losses.CategoricalCrossentropy(label_smoothing=0.1),
-              metrics=['accuracy'])
+with mirrored_strategy.scope():
+    model = get_my_EFFmodel(img_height, img_width, class_nums, '/home/zhang.xinxi/CV/checkpoint/final/cp-0002.ckpt')
+    model.compile(optimizer=keras.optimizers.Adam(), loss=keras.losses.CategoricalCrossentropy(label_smoothing=0.1), metrics=['accuracy'])
 
 print(model.summary())
 
